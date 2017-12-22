@@ -1,0 +1,68 @@
+*** Apache + Tomcat + HTTPS on Windows ***
+以下操作可以实现从 Apache Https 映射到 Tomcat Http
+安装环境：java + tomcat + apache
+
+一、制作反向代理，打开httpd.conf
+
+	1. 放开 LoadModule proxy_module modules/mod_proxy.so
+	2. 放开 LoadModule proxy_ajp_module modules/mod_proxy_ajp.so
+	3. 尾部增加 ProxyPreserveHost On
+	4. 尾部增加 ProxyPass / ajp://localhost/ retry=0
+	5. 注意我们使用ajp协议，默认端口是8009
+	6. 重启apache，确认反向代理是否正常工作
+
+
+二、配置单向Https证书，打开httpd.conf
+
+	1. 放开 LoadModule ssl_module modules/mod_ssl.so
+	2. 放开 Include conf/extra/httpd-ssl.conf
+	3. 注释 #Include conf/extra/httpd-ahssl.conf
+	4. 将证书拷贝到 ${SRVROOT}/conf/server.crt 和 ${SRVROOT}/conf/server.key
+	5. 上述是 httpd-ssl.conf 里面的默认证书路径，这样就不需要改 httpd-ssl.conf
+	6. 重启apache，确认https是否能正常工作
+
+
+*** 自己签发证书，如何通过浏览器的安全性检查 ***
+有一种暴力方法，可以让浏览器忽略所有未受信证书的安全性检查
+以chrome为例，只需加上这两个启动参数即可 --ignore-certificate-errors --test-type
+
+而通过把证书导入到浏览器的方式，能够真正去掉不安全的Warning
+一、制作根证书
+
+	1. 生成私钥 openssl genrsa -out root.key 2048
+	2. 生成请求 openssl req -new -key root.key -out root.csr -subj "/C=CN/ST=ZheJiang/L=HangZhou/O=Robooot/OU=ROOT/CN=LeonChen"
+	3. 生成证书 openssl x509 -req -days 3650 -extensions v3_ca -signkey root.key -in root.csr -out root.crt
+	4. 查看证书 openssl x509 -noout -text -in root.crt
+
+
+二、制作server端证书
+
+	1. 生成私钥 openssl genrsa -out server.key 2048
+	2. 生成请求 openssl req -new -key server.key -out server.csr -subj "/C=CN/ST=ZheJiang/L=HangZhou/O=Robooot/OU=Server/CN=LeonChen"
+	3. 签发证书 openssl ca -days 3650 -extensions v3_req -in server.csr -cert root.crt -keyfile root.key -out server.crt
+
+		1. 如果要在浏览器中去掉不安全的Warning，必须用 openssl ca，而不是openssl x509
+		2. 执行前需修改config文件 /etc/pki/tls/openssl.cnf
+		3. 找到 [ v3_req ] 部分，在末尾增加以下内容
+
+			* subjectAltName = @alt_names
+			* [ alt_names ]
+			* IP.1 = 127.0.0.1
+			* DNS.1 = localhost
+		4. 找到 [ CA_default ] 部分，将 dir 设为自己指定的路径
+		5. 在 $dir 下面创建下列文件（否则openssl ca 会报错，可以跟着错误提示一步步创建）
+
+			* /$dir/newcerts // 空文件夹
+			* /$dir/index.txt // 空文件
+			* /$dir/serial // 就写一个数字，一般是01
+		6. 准备工作已完成，现在可以执行 openssl ca 命令了
+		7. 每次执行完 openssl ca，都要清空index.txt：> $dir/index.txt
+	4. 查看证书 openssl x509 -noout -text -in server.crt
+
+
+三、导入根证书
+
+	1. 以chrome为例，设置 -> 高级 -> 管理证书 -> 受信任的根证书颁发机构
+	2. 导入根证书 root.crt，然后重启浏览器，确认是否安全
+	3. 注意 server.crt 和 server.key 要事先放到apache里面
+
